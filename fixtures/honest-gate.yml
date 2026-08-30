@@ -1,0 +1,41 @@
+# Synthetic fixture. A gate whose checks read repository content the job did
+# not produce, and which refuses to pass on an empty set. gatescan must report
+# this clean: a scanner that flags every workflow is worth nothing.
+name: schema-compatibility
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    name: Schema Compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate committed schemas parse
+        run: |
+          set -euo pipefail
+          if [ -z "$(ls -A contracts/schemas 2>/dev/null)" ]; then
+            echo "::error::no committed schemas to validate"
+            exit 1
+          fi
+          for f in contracts/schemas/*.json; do
+            if [ ! -s "$f" ]; then
+              echo "::error::empty schema $f"
+              exit 1
+            fi
+          done
+
+      - name: Compare against published baseline
+        run: |
+          set -euo pipefail
+          if ! diff -u contracts/baseline/v1.json contracts/schemas/current.json; then
+            echo "::error::schema drifted from committed baseline"
+            exit 1
+          fi

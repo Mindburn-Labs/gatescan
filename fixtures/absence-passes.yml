@@ -1,0 +1,28 @@
+# Synthetic fixture. The verification loop fails only from inside its body, so
+# a glob matching nothing exits zero and absence reads as compliance.
+name: attestation-check
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify Attestations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify every attestation
+        run: |
+          set -euo pipefail
+          for att in build/attestations/*.json; do
+            if ! grep -q '"verified":true' "$att"; then
+              echo "::error::unverified attestation $att"
+              exit 1
+            fi
+          done
+          echo "all attestations verified"

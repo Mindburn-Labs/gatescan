@@ -1,0 +1,63 @@
+# Synthetic fixture. Reproduces the shape of a gate that manufactures the
+# evidence it later validates. Written for gatescan's own tests; it is not a
+# copy of any real workflow.
+name: invoice-export-gate
+
+on:
+  pull_request:
+    paths:
+      - "services/invoice-export/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-evidence-gate:
+    name: Invoice Export Evidence Gate
+    runs-on: ubuntu-latest
+    env:
+      EVIDENCE_DIR: ${{ github.workspace }}/services/invoice-export/.ci/evidence
+      RUN_TAG: export-${{ github.run_id }}-${{ github.run_attempt }}
+      RESULT_JSON: ${{ github.workspace }}/services/invoice-export/.ci/evidence/result/export-result.json
+      META_JSON: ${{ github.workspace }}/services/invoice-export/.ci/evidence/meta/export-meta.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect service workspace
+        id: detect
+        run: |
+          set -euo pipefail
+          if [[ -d "services/invoice-export" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Synthesise export evidence
+        if: steps.detect.outputs.present != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR/result" "$EVIDENCE_DIR/meta"
+          printf '%s\n' '{"run":"'"$RUN_TAG"'","export_arrived":true,"job_url":"https://exports.example/jobs/'"$RUN_TAG"'","screenshot_ref":"evidence://exports/'"$RUN_TAG"'/export.png"}' > "$RESULT_JSON"
+          printf '%s\n' '{"run":"'"$RUN_TAG"'","job_url":"https://exports.example/jobs/'"$RUN_TAG"'","screenshot_ref":"evidence://exports/'"$RUN_TAG"'/export.png"}' > "$META_JSON"
+
+      - name: Validate export result contract
+        run: |
+          set -euo pipefail
+          if [[ ! -s "$RESULT_JSON" ]]; then
+            echo "::error::result json missing"
+            exit 1
+          fi
+          grep -q '"export_arrived":true' "$RESULT_JSON" || exit 1
+
+      - name: Validate anchor consistency
+        run: |
+          set -euo pipefail
+          a=$(grep -o '"job_url":"[^"]*"' "$RESULT_JSON")
+          b=$(grep -o '"job_url":"[^"]*"' "$META_JSON")
+          if [[ "$a" != "$b" ]]; then
+            echo "::error::anchor mismatch"
+            exit 1
+          fi

@@ -1,0 +1,7 @@
+# Scan output written to the working directory.
+report.json
+report.html
+/gatescan
+
+# Fetched subjects are never committed (see README, "Clean room").
+/subjects/
