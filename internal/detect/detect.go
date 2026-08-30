@@ -41,6 +41,11 @@ const (
 	VerdictPartial     = "PARTIAL"
 	VerdictNothing     = "ESTABLISHES_NOTHING"
 	VerdictNoAssertion = "NO_ASSERTIONS"
+	// VerdictUnanalysed is not a judgement about the gate. It says the shell
+	// was too opaque to name the checks' inputs, and reporting that plainly is
+	// the only honest option — the alternative is exactly the defect this tool
+	// exists to find, absence of evidence rendered as a conclusion.
+	VerdictUnanalysed = "INPUTS_NOT_IDENTIFIED"
 )
 
 // Finding is one observation, citable at file:line.
@@ -61,6 +66,10 @@ type Assertion struct {
 	Internal []string `json:"internal_inputs,omitempty"`
 	External []string `json:"external_inputs,omitempty"`
 }
+
+// analysed reports whether any input was identified at all. A check with none
+// was not judged; it was not read.
+func (a Assertion) analysed() bool { return len(a.Internal)+len(a.External) > 0 }
 
 // JobResult is the per-job verdict and its supporting findings.
 type JobResult struct {
@@ -218,16 +227,24 @@ func verdict(as []Assertion) string {
 	if len(as) == 0 {
 		return VerdictNoAssertion
 	}
-	withExternal := 0
+	analysed, withExternal := 0, 0
 	for _, a := range as {
+		if !a.analysed() {
+			continue
+		}
+		analysed++
 		if len(a.External) > 0 {
 			withExternal++
 		}
 	}
 	switch {
+	case analysed == 0:
+		// Every check was opaque. Saying ESTABLISHES_NOTHING here would be a
+		// conclusion drawn from having seen nothing.
+		return VerdictUnanalysed
 	case withExternal == 0:
 		return VerdictNothing
-	case withExternal < len(as):
+	case withExternal < analysed:
 		return VerdictPartial
 	default:
 		return VerdictEstablishes

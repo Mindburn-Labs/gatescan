@@ -347,6 +347,32 @@ jobs:
 	}
 }
 
+// Zero identified inputs means the shell was opaque, not that the gate
+// establishes nothing. Reporting a verdict there would be this tool committing
+// the very defect it looks for: a conclusion drawn from having seen nothing.
+func TestOpaqueChecksAreNotJudged(t *testing.T) {
+	res := scan(t, `
+name: t
+on: [push]
+jobs:
+  g:
+    steps:
+      - uses: actions/checkout@v4
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            exit 1
+          fi
+`, Options{})
+	if got := res.Jobs[0].Verdict; got != VerdictUnanalysed {
+		t.Errorf("verdict = %s, want %s", got, VerdictUnanalysed)
+	}
+	if len(res.Findings) != 0 {
+		t.Errorf("opaque job produced findings: %+v", res.Findings)
+	}
+}
+
 func TestVerdictLadder(t *testing.T) {
 	cases := []struct {
 		name string
@@ -354,6 +380,8 @@ func TestVerdictLadder(t *testing.T) {
 		want string
 	}{
 		{"no checks", nil, VerdictNoAssertion},
+		{"all opaque", []Assertion{{Step: "x"}}, VerdictUnanalysed},
+		{"one opaque, one external", []Assertion{{Step: "x"}, {External: []string{"b"}}}, VerdictEstablishes},
 		{"all internal", []Assertion{{Internal: []string{"a"}}}, VerdictNothing},
 		{"mixed", []Assertion{{Internal: []string{"a"}}, {External: []string{"b"}}}, VerdictPartial},
 		{"all external", []Assertion{{External: []string{"b"}}}, VerdictEstablishes},

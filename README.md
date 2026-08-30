@@ -82,6 +82,14 @@ Per job, from its checks — a check being any step that can turn the run red:
 | `PARTIAL` | some checks rest entirely on inputs this job produced |
 | `ESTABLISHES_NOTHING` | every check rests entirely on inputs this job produced |
 | `NO_ASSERTIONS` | no step in this job can fail the run |
+| `INPUTS_NOT_IDENTIFIED` | the checks' shell was too opaque to read — **not** a verdict on the gate |
+
+That last row is the one to read carefully. When gatescan cannot name a check's
+inputs it says so, rather than reporting `ESTABLISHES_NOTHING` on the strength of
+having seen nothing. Drawing a conclusion from an empty reading is the defect
+this tool exists to find, and it is not exempt from it: an early version scored
+its own CI as establishing nothing, on a `gofmt` step whose inputs it simply
+could not parse.
 
 ## Rules
 
@@ -120,7 +128,12 @@ scan clean. A scanner that flags everything is worth nothing.
 
 - GitHub Actions workflow syntax only.
 - Static shell reading. Paths assembled at runtime by a program gatescan cannot
-  read are invisible to it; a clean report is not proof of a sound gate.
+  read are invisible to it; a clean report is not proof of a sound gate. Jobs it
+  could not read are counted separately and reported as `INPUTS_NOT_IDENTIFIED`,
+  so coverage gaps show up as gaps.
+- A step is treated as a check when its shell names an explicit failure path
+  (`exit 1`, `process.exit(1)`, `::error::`). A step that fails only through a
+  called tool's exit code is not counted, which under-reports.
 - `unreachable_subject` shells out to `git check-ignore` rather than
   reimplementing the pattern language. Without git, it reports nothing.
 - Reachability is judged per job. Evidence handed between jobs through uploaded

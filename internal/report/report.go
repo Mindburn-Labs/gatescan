@@ -36,6 +36,7 @@ type Summary struct {
 	BySeverity           map[string]int `json:"by_severity"`
 	ByRule               map[string]int `json:"by_rule"`
 	JobsEstablishNothing int            `json:"jobs_establishing_nothing"`
+	JobsUnanalysed       int            `json:"jobs_inputs_not_identified"`
 }
 
 // Build assembles a report from per-workflow results.
@@ -56,8 +57,11 @@ func Build(subject string, results []*detect.Result, now time.Time) *Report {
 	for _, res := range results {
 		r.Summary.Jobs += len(res.Jobs)
 		for _, j := range res.Jobs {
-			if j.Verdict == detect.VerdictNothing {
+			switch j.Verdict {
+			case detect.VerdictNothing:
 				r.Summary.JobsEstablishNothing++
+			case detect.VerdictUnanalysed:
+				r.Summary.JobsUnanalysed++
 			}
 		}
 		for _, f := range res.Findings {
@@ -87,6 +91,7 @@ var verdictGloss = map[string]string{
 	detect.VerdictPartial:     "some checks rest entirely on inputs this job produced",
 	detect.VerdictNothing:     "every check rests entirely on inputs this job produced",
 	detect.VerdictNoAssertion: "no step in this job can fail the run",
+	detect.VerdictUnanalysed:  "this job's checks were too opaque to read; not a verdict on the gate",
 }
 
 // Terminal prints a human-readable summary.
@@ -131,6 +136,9 @@ func Terminal(w io.Writer, r *Report) {
 		r.Summary.Workflows, r.Summary.Jobs, r.Summary.Findings)
 	if r.Summary.JobsEstablishNothing > 0 {
 		fmt.Fprintf(w, " — %d job(s) establish nothing", r.Summary.JobsEstablishNothing)
+	}
+	if r.Summary.JobsUnanalysed > 0 {
+		fmt.Fprintf(w, " — %d job(s) too opaque to read", r.Summary.JobsUnanalysed)
 	}
 	fmt.Fprintln(w)
 }

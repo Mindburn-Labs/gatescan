@@ -71,7 +71,7 @@ h2{font-size:19px;margin:38px 0 12px;padding-bottom:8px;border-bottom:2px solid 
 .v.establishes{background:var(--pines);color:var(--pine)}
 .v.partial{background:var(--ochres);color:var(--ochre)}
 .v.establishes-nothing{background:var(--oxides);color:var(--oxide)}
-.v.no-assertions{background:var(--surface2);color:var(--muted)}
+.v.no-assertions,.v.inputs-not-identified{background:var(--surface2);color:var(--muted)}
 .gloss{color:var(--muted);font-size:13.5px}
 .assert{border-top:1px dotted var(--hairs);margin-top:11px;padding-top:10px;font-size:13.5px}
 .assert .s{font-weight:600}
@@ -109,6 +109,7 @@ footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--hair);color:v
   <div class="fig"><span class="n">{{.Summary.Jobs}}</span><span class="l">job(s)</span></div>
   <div class="fig"><span class="n">{{.Summary.Findings}}</span><span class="l">finding(s)</span></div>
   <div class="fig"><span class="n">{{.Summary.JobsEstablishNothing}}</span><span class="l">job(s) establishing nothing</span></div>
+  <div class="fig"><span class="n">{{.Summary.JobsUnanalysed}}</span><span class="l">job(s) too opaque to read</span></div>
 </div>
 
 {{range .Workflows}}
