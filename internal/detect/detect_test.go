@@ -145,7 +145,10 @@ jobs:
 	}
 }
 
-func TestSyntheticAnchorDetectsReservedHostsAndDeadSchemes(t *testing.T) {
+// Two anchor rules, because the two claims are not equally provable: a
+// reserved documentation host is fake by standard, an unfamiliar scheme merely
+// needs a human. Reporting both at the same weight would over-claim.
+func TestAnchorRulesSeparateProvableFromReviewable(t *testing.T) {
 	res := scan(t, `
 name: t
 on: [push]
@@ -155,22 +158,142 @@ jobs:
       - name: write anchors
         run: |
           mkdir -p out
-          echo '{"job":"https://ci.finance.example/jobs/1","shot":"ci://finance/1/x.png","real":"https://github.com/a/b"}' > out/a.json
+          echo '{"job":"https://ci.finance.example/jobs/1","shot":"ci://finance/1/x.png","real":"https://github.com/a/b","chart":"oci://ghcr.io/x/y"}' > out/a.json
 `, Options{})
 
-	found := map[string]bool{}
+	byRule := map[string][]Finding{}
 	for _, f := range res.Findings {
-		if f.Rule == RuleSyntheticAnchor {
-			found[f.Detail] = true
+		byRule[f.Rule] = append(byRule[f.Rule], f)
+	}
+	if n := len(byRule[RuleSyntheticAnchor]); n != 1 {
+		t.Errorf("synthetic_anchor = %d, want 1 (the reserved host): %+v", n, byRule[RuleSyntheticAnchor])
+	}
+	if n := len(byRule[RuleUnresolvable]); n != 1 {
+		t.Errorf("unresolvable_anchor = %d, want 1 (the ci:// scheme): %+v", n, byRule[RuleUnresolvable])
+	}
+	if len(byRule[RuleUnresolvable]) == 1 && byRule[RuleUnresolvable][0].Severity != SeverityMedium {
+		t.Error("unresolvable_anchor must stay below the default failure threshold")
+	}
+	for _, f := range res.Findings {
+		if strings.Contains(f.Detail, "github.com") || strings.Contains(f.Detail, "ghcr.io") {
+			t.Errorf("flagged a resolvable reference: %s", f.Detail)
 		}
 	}
-	if len(found) != 2 {
-		t.Fatalf("synthetic_anchor findings = %d, want 2: %+v", len(found), found)
+}
+
+// A scheme is readable even when the rest of the reference still holds an
+// unexpanded variable; letting url.Parse fail there would skip the check
+// silently, which is the behaviour this tool exists to object to.
+func TestSchemeCheckSurvivesUnexpandedVariables(t *testing.T) {
+	rule, _, reason := anchorProblem("madeup://${SOME_VAR}/x.json")
+	if rule != RuleUnresolvable || reason == "" {
+		t.Errorf("anchorProblem = %q/%q, want an unresolvable_anchor reason", rule, reason)
 	}
-	for d := range found {
-		if strings.Contains(d, "github.com") {
-			t.Errorf("flagged a real host: %s", d)
+}
+
+// Contacting a registry or a remote is a referent that path analysis alone
+// cannot see. Publishing steps were being reported as vacuous checks.
+func TestEgressIsAnExternalReferent(t *testing.T) {
+	res := scan(t, `
+name: t
+on: [push]
+jobs:
+  g:
+    steps:
+      - name: package
+        run: |
+          mkdir -p dist
+          tar czf dist/chart.tgz chart/
+      - name: push chart
+        run: |
+          helm push dist/chart.tgz oci://ghcr.io/org/charts || exit 1
+`, Options{})
+	if n := rules(res)[RuleSelfReferential]; n != 0 {
+		t.Errorf("publishing step reported as a vacuous check: %+v", res.Findings)
+	}
+}
+
+// An artifact a toolchain built from repository source answers to that source,
+// one hop beyond what static shell reading can follow.
+func TestToolchainOutputCountsAsDerived(t *testing.T) {
+	res := scan(t, `
+name: t
+on: [push]
+jobs:
+  g:
+    steps:
+      - uses: actions/checkout@v4
+      - name: generate report
+        run: |
+          mkdir -p reports
+          go test ./... -json > reports/out.json
+      - name: require coverage
+        run: grep -q PASS reports/out.json || exit 1
+`, Options{})
+	if n := rules(res)[RuleSelfReferential]; n != 0 {
+		t.Errorf("toolchain-derived artifact treated as self-referential: %+v", res.Findings)
+	}
+}
+
+// Regression: a toolchain step that happens to mkdir the artifact tree must not
+// launder the provenance of literals other steps write into it. Attributing
+// directories the same way as files made a fabricated evidence chain look sound.
+func TestMkdirDoesNotLaunderProvenance(t *testing.T) {
+	res := scan(t, `
+name: t
+on: [push]
+jobs:
+  g:
+    steps:
+      - name: build
+        run: |
+          mkdir -p out/evidence
+          go build ./... 2>&1 | tee out/build.log
+      - name: fabricate
+        run: |
+          echo '{"ok":true}' > out/evidence/result.json
+      - name: validate
+        run: grep -q '"ok":true' out/evidence/result.json || exit 1
+`, Options{})
+	if n := rules(res)[RuleSelfReferential]; n != 1 {
+		t.Fatalf("self_referential findings = %d, want 1 — a mkdir must not confer toolchain provenance: %+v", n, res.Findings)
+	}
+	if got := res.Jobs[0].Verdict; got != VerdictNothing {
+		t.Errorf("verdict = %s, want %s", got, VerdictNothing)
+	}
+}
+
+// Building twice and comparing is a real check: the two runs are independent
+// trials and disagreement is the signal. Reporting it at the same weight as a
+// tautology would burn the reader's trust on a correct pipeline.
+func TestReplicationCheckIsDowngradedNotSuppressed(t *testing.T) {
+	res := scan(t, `
+name: t
+on: [push]
+jobs:
+  g:
+    steps:
+      - name: first build
+        run: |
+          mkdir -p out
+          sha256sum bin/app > out/first.sha256
+      - name: second build
+        run: |
+          sha256sum bin/app > out/second.sha256
+      - name: diff hashes
+        run: diff out/first.sha256 out/second.sha256 || exit 1
+`, Options{})
+	var found *Finding
+	for i, f := range res.Findings {
+		if f.Rule == RuleSelfReferential {
+			found = &res.Findings[i]
 		}
+	}
+	if found == nil {
+		t.Fatalf("replication check should still be reported: %+v", res.Findings)
+	}
+	if found.Severity != SeverityHigh {
+		t.Errorf("severity = %s, want %s for a two-producer comparison", found.Severity, SeverityHigh)
 	}
 }
 

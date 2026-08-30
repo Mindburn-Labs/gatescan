@@ -28,6 +28,7 @@ const (
 const (
 	RuleSelfReferential = "self_referential_evidence"
 	RuleSyntheticAnchor = "synthetic_anchor"
+	RuleUnresolvable    = "unresolvable_anchor"
 	RuleUnreachable     = "unreachable_subject"
 	RuleFabricated      = "fabricated_fallback"
 	RuleSuppressed      = "suppressed_evidence_step"
@@ -130,6 +131,8 @@ func assessJob(job workflow.Job, facts []stepFacts) ([]Assertion, []Finding) {
 	var assertions []Assertion
 	var findings []Finding
 
+	derived := derivedProducers(facts)
+
 	for i, f := range facts {
 		if !f.Gate {
 			continue
@@ -141,14 +144,23 @@ func assessJob(job workflow.Job, facts []stepFacts) ([]Assertion, []Finding) {
 		}
 
 		a := Assertion{Step: f.Step.Label(), Line: f.Step.Line}
+		a.External = append(a.External, f.Egress...)
 		sources := map[string]string{}
 		for _, ref := range f.Refs {
 			if self[ref] {
 				continue // the step's own scratch output is not an input
 			}
-			if src, ok := coveredBy(produced, ref); ok {
+			if o, ok := coveredBy(produced, ref); ok {
+				if derived[o.Step] && !o.ViaMkdir {
+					// Output of a compiler or test runner over repository
+					// source: the referent is that source, one hop away and
+					// out of reach of static shell reading. Creating the
+					// directory does not confer this — only writing the file.
+					a.External = append(a.External, "derived:"+o.Step)
+					continue
+				}
 				a.Internal = append(a.Internal, ref)
-				sources[ref] = src
+				sources[ref] = o.Step
 			} else {
 				a.External = append(a.External, ref)
 			}
@@ -157,20 +169,49 @@ func assessJob(job workflow.Job, facts []stepFacts) ([]Assertion, []Finding) {
 		sort.Strings(a.External)
 
 		if len(a.Internal) > 0 && len(a.External) == 0 {
+			sev, referent := SeverityCritical,
+				"none — this check compares the job's output against the job's output, so it cannot fail"
+			if distinctValues(sources) > 1 {
+				// Two steps producing independently and then compared is the
+				// reproducible-build idiom, where disagreement is the signal.
+				// It is vacuous only when both outputs derive from one source.
+				sev = SeverityHigh
+				referent = "only disagreement between this job's own steps — sound for a replication check whose two outputs were produced independently, vacuous when both derive from a single source"
+			}
 			findings = append(findings, Finding{
 				Rule:     RuleSelfReferential,
-				Severity: SeverityCritical,
+				Severity: sev,
 				Job:      job.ID,
 				Step:     f.Step.Label(),
 				Line:     f.Step.Line,
 				Detail: fmt.Sprintf("validates %s, every one of which was written earlier in this same job (%s)",
 					pathList(a.Internal), sourceList(a.Internal, sources)),
-				Referent: "none — this check compares the job's output against the job's output, so it cannot fail",
+				Referent: referent,
 			})
 		}
 		assertions = append(assertions, a)
 	}
 	return assertions, findings
+}
+
+// derivedProducers maps a step label to whether that step built its output
+// from repository source with a toolchain.
+func derivedProducers(facts []stepFacts) map[string]bool {
+	out := map[string]bool{}
+	for _, f := range facts {
+		if f.Derives {
+			out[f.Step.Label()] = true
+		}
+	}
+	return out
+}
+
+func distinctValues(m map[string]string) int {
+	seen := map[string]bool{}
+	for _, v := range m {
+		seen[v] = true
+	}
+	return len(seen)
 }
 
 func verdict(as []Assertion) string {
@@ -288,16 +329,27 @@ func absenceReadsAsPass(job workflow.Job, facts []stepFacts) []Finding {
 	return out
 }
 
-// reservedHosts are names guaranteed never to resolve to a real service:
-// RFC 2606 reserved TLDs and second-level names, plus RFC 6761 special use.
+// reservedHosts are names standards guarantee never resolve to a real service.
+// RFC 2606 documentation domains and reserved TLDs only.
+//
+// Loopback is deliberately absent. A CI job curling http://localhost:8080/health
+// is smoke-testing a service it just started, which is a real referent; flagging
+// it produced nothing but noise when this rule was first run against real
+// pipelines.
 var reservedHosts = []string{
-	".example", ".invalid", ".test", ".localhost", ".local",
+	".example", ".invalid", ".test",
 	"example.com", "example.net", "example.org",
-	"localhost", "127.0.0.1", "0.0.0.0", "::1",
 }
 
+// allowedSchemes name locations something can actually be fetched from. The
+// list covers the package, registry, keyserver and database schemes real
+// pipelines use, so the rule fires on invented ones rather than unfamiliar ones.
 var allowedSchemes = map[string]bool{
 	"http": true, "https": true, "ssh": true, "git": true, "file": true,
+	"git+https": true, "git+ssh": true, "oci": true, "docker": true,
+	"hkp": true, "hkps": true, "s3": true, "gs": true, "abfss": true,
+	"postgres": true, "postgresql": true, "mysql": true, "redis": true,
+	"amqp": true, "amqps": true, "mongodb": true, "grpc": true, "grpcs": true,
 }
 
 var reURLLit = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"'` + "`" + `),]+`)
@@ -313,7 +365,7 @@ func syntheticAnchors(wf *workflow.Workflow, job workflow.Job, facts []stepFacts
 			if seen[expanded] {
 				continue
 			}
-			reason := anchorProblem(expanded)
+			rule, sev, reason := anchorProblem(expanded)
 			if reason == "" {
 				continue
 			}
@@ -322,14 +374,18 @@ func syntheticAnchors(wf *workflow.Workflow, job workflow.Job, facts []stepFacts
 			if line == 0 {
 				line = step.Line
 			}
+			referent := "none — an anchor that resolves nowhere records the shape of proof without its substance"
+			if rule == RuleUnresolvable {
+				referent = "unknown — whether this resolves depends on a convention outside the workflow, so a reader cannot tell proof from its shape without being told"
+			}
 			out = append(out, Finding{
-				Rule:     RuleSyntheticAnchor,
-				Severity: SeverityHigh,
+				Rule:     rule,
+				Severity: sev,
 				Job:      job.ID,
 				Step:     step.Label(),
 				Line:     line,
 				Detail:   fmt.Sprintf("evidence reference %s %s", expanded, reason),
-				Referent: "none — an anchor that resolves nowhere records the shape of proof without its substance",
+				Referent: referent,
 			})
 		}
 	}
@@ -351,24 +407,48 @@ func syntheticAnchors(wf *workflow.Workflow, job workflow.Job, facts []stepFacts
 	return out
 }
 
-func anchorProblem(raw string) string {
+var reScheme = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*)://`)
+
+// anchorProblem classifies an evidence reference, returning the rule to raise,
+// its severity, and a description — or an empty reason when the reference is
+// fine.
+//
+// The two checks differ in how much they can prove, and saying so is the point:
+//   - A reserved documentation host is fake by standard. No convention rescues
+//     it, so it is reported as fact.
+//   - An unrecognised scheme may be a perfectly good in-house locator. The
+//     workflow cannot tell us, so it is raised for a human at medium and left
+//     out of the default failure threshold. Over-claiming here would cost more
+//     than the finding is worth.
+func anchorProblem(raw string) (rule, severity, reason string) {
+	m := reScheme.FindStringSubmatch(raw)
+	if m == nil {
+		return "", "", ""
+	}
+	scheme := strings.ToLower(m[1])
+
+	// Scheme is readable even when the rest still holds an unexpanded variable,
+	// so judge it first and never let a "${...}" silently skip the check.
+	if !allowedSchemes[scheme] {
+		return RuleUnresolvable, SeverityMedium,
+			fmt.Sprintf("uses the non-standard %q scheme; a reader outside this pipeline cannot resolve it", scheme)
+	}
+
 	u, err := url.Parse(raw)
 	if err != nil {
-		return ""
-	}
-	if !allowedSchemes[u.Scheme] {
-		return fmt.Sprintf("uses the %q scheme, which names no retrievable location", u.Scheme)
+		return "", "", ""
 	}
 	host := strings.ToLower(u.Hostname())
 	if host == "" {
-		return ""
+		return "", "", ""
 	}
 	for _, r := range reservedHosts {
 		if host == strings.TrimPrefix(r, ".") || strings.HasSuffix(host, r) {
-			return fmt.Sprintf("resolves to the reserved host %q, which by standard never hosts a real service", host)
+			return RuleSyntheticAnchor, SeverityHigh,
+				fmt.Sprintf("resolves to the reserved host %q, which by standard never hosts a real service", host)
 		}
 	}
-	return ""
+	return "", "", ""
 }
 
 // unreachableSubject flags path filters naming paths the repository excludes,

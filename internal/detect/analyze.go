@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -15,8 +16,12 @@ import (
 type stepFacts struct {
 	Step workflow.Step
 
-	// Writes are paths this step creates or overwrites.
+	// Writes are files this step creates or overwrites.
 	Writes []string
+	// Dirs are directories this step creates. Kept apart from Writes: making
+	// a directory says nothing about what ends up inside it, so a directory
+	// must never inherit the provenance of the step that mkdir'd it.
+	Dirs []string
 	// Refs are every path this step mentions, written or read.
 	Refs []string
 	// Gate is true when the step has an explicit failure path, i.e. it can
@@ -24,6 +29,14 @@ type stepFacts struct {
 	Gate bool
 	// GlobLoops are shell glob iterations found in the step.
 	GlobLoops []globLoop
+	// Derives is true when the step ran a compiler or test runner, so its
+	// output is a function of repository source rather than of literals the
+	// step wrote itself.
+	Derives bool
+	// Egress names the external services this step contacts. A step that
+	// talks to a registry, an API, or a remote is answerable to something
+	// outside the job even when every path it touches is local.
+	Egress []string
 }
 
 type globLoop struct {
@@ -41,10 +54,29 @@ var (
 	reVarTok   = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?`)
 	reBareTok  = regexp.MustCompile(`("[^"\n]*/[^"\n]*"|'[^'\n]*/[^'\n]*'|[A-Za-z0-9_./$${}-]*/[A-Za-z0-9_./$${}*-]+)`)
 	reForGlob  = regexp.MustCompile(`(?:for\s+\w+\s+in\s+|=\()\s*("[^"]*\*[^"]*"|'[^']*\*[^']*'|[^\s;)]*\*[^\s;)]*)`)
+	reURLInRun = regexp.MustCompile(`https?://[^\s"'` + "`" + `),]+`)
 	reEmptyChk = regexp.MustCompile(`(?:-eq\s+0|-z\s+|\bif-no-files-found|\[\[\s*\$\{#|\blength\s*===?\s*0|\.length\s*===?\s*0)`)
 	// Shell-local assignment at the start of a line: VAR=value.
 	reLocalAssign = regexp.MustCompile(`(?m)^\s*([A-Z_][A-Z0-9_]*)=("[^"\n]*"|'[^'\n]*'|[^\s;&|]+)`)
 )
+
+// egressCommands reach a service outside the runner, so a step running one has
+// an external referent that no amount of local file analysis will reveal.
+var egressCommands = []string{
+	"docker push", "docker pull", "helm push", "oras push", "skopeo", "crane ",
+	"cosign ", "gh release", "gh api", "gh pr", "npm publish", "twine upload",
+	"wrangler deploy", "aws ", "gcloud ", "az ", "curl ", "wget ",
+	"git push", "git fetch", "git clone", "git ls-remote",
+}
+
+// toolchainCommands consume repository source. Deliberately narrow: a bare
+// `bash script.sh` is not here, because the script may do nothing but echo
+// literals, which is precisely the case this must not excuse.
+var toolchainCommands = []string{
+	"go test", "go build", "go vet", "go run", "npm test", "npm run", "npm ci",
+	"pnpm ", "yarn ", "pytest", "cargo ", "mvn ", "gradle ", "tsc", "make ",
+	"dotnet ", "bazel ", "buf ", "terraform ",
+}
 
 // failureMarkers are the ways a run block can decide to fail the job.
 var failureMarkers = []string{"exit 1", "process.exit(1)", "::error::", "exit(1)", "throw new Error"}
@@ -129,7 +161,7 @@ func analyzeStep(s workflow.Step, env map[string]string) stepFacts {
 			// this job's output, not pre-existing repository content.
 			p := workflow.Expand(unquote(tok), env)
 			for p != "" && p != "." && p != "/" && looksLikePath(p) {
-				f.Writes = append(f.Writes, p)
+				f.Dirs = append(f.Dirs, p)
 				p = parentDir(p)
 			}
 		}
@@ -152,8 +184,16 @@ func analyzeStep(s workflow.Step, env map[string]string) stepFacts {
 	}
 
 	f.GlobLoops = findGlobLoops(run, env)
+	f.Egress = findEgress(run)
+	for _, c := range toolchainCommands {
+		if strings.Contains(low, c) {
+			f.Derives = true
+			break
+		}
+	}
 
 	sortUnique(&f.Writes)
+	sortUnique(&f.Dirs)
 	sortUnique(&f.Refs)
 	return f
 }
@@ -201,6 +241,28 @@ func parentDir(p string) string {
 	return p[:i]
 }
 
+// findEgress lists the external services a run block contacts, by command and
+// by any URL it names on a host that really resolves.
+func findEgress(run string) []string {
+	var out []string
+	low := strings.ToLower(run)
+	for _, c := range egressCommands {
+		if strings.Contains(low, c) {
+			out = append(out, "network:"+strings.TrimSpace(c))
+		}
+	}
+	for _, lit := range reURLInRun.FindAllString(run, -1) {
+		if _, _, bad := anchorProblem(lit); bad != "" {
+			continue
+		}
+		if u, err := url.Parse(lit); err == nil && u.Hostname() != "" {
+			out = append(out, "network:"+u.Hostname())
+		}
+	}
+	sortUnique(&out)
+	return out
+}
+
 func sortUnique(xs *[]string) {
 	seen := map[string]bool{}
 	out := (*xs)[:0]
@@ -214,29 +276,46 @@ func sortUnique(xs *[]string) {
 	*xs = out
 }
 
-// producedBefore is the set of paths written by steps earlier in the job.
-func producedBefore(facts []stepFacts, upto int) map[string]string {
-	out := map[string]string{}
+// origin records which earlier step put a path there, and how.
+type origin struct {
+	Step     string
+	ViaMkdir bool
+}
+
+// producedBefore is every path materialised by steps earlier in the job.
+// Files win over directories: if a step wrote the file, that is its provenance,
+// regardless of who created the enclosing directory.
+func producedBefore(facts []stepFacts, upto int) map[string]origin {
+	out := map[string]origin{}
+	for i := 0; i < upto; i++ {
+		for _, d := range facts[i].Dirs {
+			if _, seen := out[d]; !seen {
+				out[d] = origin{Step: facts[i].Step.Label(), ViaMkdir: true}
+			}
+		}
+	}
 	for i := 0; i < upto; i++ {
 		for _, w := range facts[i].Writes {
-			if _, seen := out[w]; !seen {
-				out[w] = facts[i].Step.Label()
+			if o, seen := out[w]; !seen || o.ViaMkdir {
+				out[w] = origin{Step: facts[i].Step.Label()}
 			}
 		}
 	}
 	return out
 }
 
-// coveredBy reports the producing step for ref, matching a path against
-// produced files and against produced directories that contain it.
-func coveredBy(produced map[string]string, ref string) (string, bool) {
-	if s, ok := produced[ref]; ok {
-		return s, true
+// coveredBy reports how ref came to exist, matching against produced files and
+// against produced directories that contain it. The longest matching prefix
+// wins, so a file's own writer beats a distant ancestor's mkdir.
+func coveredBy(produced map[string]origin, ref string) (origin, bool) {
+	if o, ok := produced[ref]; ok {
+		return o, true
 	}
-	for p, s := range produced {
-		if p != "" && strings.HasPrefix(ref, p+"/") {
-			return s, true
+	best, bestLen, found := origin{}, -1, false
+	for p, o := range produced {
+		if p != "" && strings.HasPrefix(ref, p+"/") && len(p) > bestLen {
+			best, bestLen, found = o, len(p), true
 		}
 	}
-	return "", false
+	return best, found
 }

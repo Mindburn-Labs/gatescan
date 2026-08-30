@@ -90,9 +90,15 @@ Per job, from its checks — a check being any step that can turn the run red:
 | `self_referential_evidence` | critical | A check validating only paths an earlier step in the same job wrote. |
 | `fabricated_fallback` | critical | A branch that runs *because* the subject is missing, and writes the evidence a later check reads. |
 | `unreachable_subject` | critical | A path filter naming something the repository excludes, so no commit can ever trigger the gate. |
-| `synthetic_anchor` | high | An evidence reference pointing at a reserved host (RFC 2606 / RFC 6761) or a scheme that names no retrievable location. |
+| `synthetic_anchor` | high | An evidence reference on a reserved documentation host (RFC 2606). Fake by standard; no local convention rescues it. |
+| `unresolvable_anchor` | medium | An evidence reference using a non-standard URI scheme. May be a sound in-house locator — the workflow cannot say, so this is raised for a human and left below the default failure threshold. |
 | `suppressed_evidence_step` | high | `continue-on-error: true` on a step producing artifacts a later check consumes. |
 | `absence_reads_as_pass` | high | A glob iteration that fails only from inside its body, so zero matches exits zero. |
+
+The two anchor rules are deliberately separated by how much they can prove. A
+reserved documentation host is fake as a matter of standard, and is reported as
+fact. An unfamiliar scheme might be a perfectly good internal locator; the
+workflow gives no way to tell, so gatescan says that rather than guessing.
 
 Rules that cannot be evaluated say so. `unreachable_subject` needs `-repo` to
 consult the repository's own ignore rules; without it the report records that
@@ -119,6 +125,12 @@ scan clean. A scanner that flags everything is worth nothing.
   reimplementing the pattern language. Without git, it reports nothing.
 - Reachability is judged per job. Evidence handed between jobs through uploaded
   artifacts is not yet followed.
+- An artifact a compiler or test runner produced from repository source counts
+  as having an external referent, since the referent is that source one hop
+  beyond what shell reading can follow. A step that merely creates the
+  directory confers nothing — only writing the file does.
+- A step contacting a registry, remote, or API has an external referent by
+  virtue of the service, so publish steps are not reported as vacuous checks.
 
 ## Clean room
 
