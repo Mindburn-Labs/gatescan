@@ -50,6 +50,9 @@ jobs:
 	if got := res.Jobs[0].Verdict; got != VerdictNothing {
 		t.Errorf("verdict = %s, want %s", got, VerdictNothing)
 	}
+	if got := res.Jobs[0].Assertions[0].Class; got != assertionExplicitFailure {
+		t.Errorf("class = %s, want %s", got, assertionExplicitFailure)
+	}
 }
 
 // The anti-false-positive test. A scanner that flags every workflow is noise,
@@ -72,6 +75,41 @@ jobs:
 	}
 	if got := res.Jobs[0].Verdict; got != VerdictEstablishes {
 		t.Errorf("verdict = %s, want %s", got, VerdictEstablishes)
+	}
+}
+
+func TestVerificationCommandsAreAssertionsWithoutExplicitFailureMarkers(t *testing.T) {
+	commands := []string{
+		"diff contracts/want.json contracts/got.json",
+		"cmp contracts/want.bin contracts/got.bin",
+		"sha256sum -c contracts/SHA256SUMS",
+		"cosign verify ghcr.io/org/app@sha256:dead",
+		"jq -e '.ok' contracts/report.json",
+		"test -s contracts/report.json",
+		"buf breaking --against contracts/proto",
+		"go-apidiff contracts/old contracts/new",
+	}
+	for _, command := range commands {
+		res := scan(t, "name: t\non: [push]\njobs:\n  g:\n    steps:\n      - run: "+command+"\n", Options{})
+		if got := res.Jobs[0].Verdict; got != VerdictEstablishes {
+			t.Errorf("%q: verdict = %s, want %s", command, got, VerdictEstablishes)
+		}
+		if got := res.Jobs[0].Assertions[0].Class; got != assertionVerification {
+			t.Errorf("%q: class = %s, want %s", command, got, assertionVerification)
+		}
+	}
+}
+
+func TestSourceTestsEstablishAgainstRepositorySource(t *testing.T) {
+	for _, command := range []string{"make test", "make check", "go test", "npm test"} {
+		res := scan(t, "name: t\non: [push]\njobs:\n  g:\n    steps:\n      - run: "+command+"\n", Options{})
+		if got := res.Jobs[0].Verdict; got != VerdictEstablishes {
+			t.Errorf("%q: verdict = %s, want %s", command, got, VerdictEstablishes)
+		}
+		assertion := res.Jobs[0].Assertions[0]
+		if assertion.Class != assertionSourceTest || len(assertion.External) != 1 || assertion.External[0] != "source:repository" {
+			t.Errorf("%q: assertion = %+v", command, assertion)
+		}
 	}
 }
 

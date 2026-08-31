@@ -24,19 +24,19 @@ type stepFacts struct {
 	Dirs []string
 	// Refs are every path this step mentions, written or read.
 	Refs []string
-	// Gate is true when the step has an explicit failure path, i.e. it can
-	// turn the job red rather than merely producing something.
-	Gate bool
+	// AssertionClass records why this step makes an evidence claim. Shell
+	// failure semantics alone are too broad to be useful: almost any command
+	// can fail, while these classes identify steps whose success says something.
+	AssertionClass string
 	// GlobLoops are shell glob iterations found in the step.
 	GlobLoops []globLoop
 	// Derives is true when the step ran a compiler or test runner, so its
 	// output is a function of repository source rather than of literals the
 	// step wrote itself.
 	Derives bool
-	// Egress names the external services this step contacts. A step that
-	// talks to a registry, an API, or a remote is answerable to something
-	// outside the job even when every path it touches is local.
-	Egress []string
+	// External names referents that path extraction cannot recover. This is
+	// either repository source consumed by a test runner or an external service.
+	External []string
 }
 
 type globLoop struct {
@@ -46,16 +46,18 @@ type globLoop struct {
 
 var (
 	// Redirection to a file. Excludes fd duplication (2>&1, >&2) and /dev/*.
-	reRedirect = regexp.MustCompile(`(?:^|[^0-9&<>\-])>>?\s*("[^"]+"|'[^']+'|[^\s;|&)<>]+)`)
-	reTee      = regexp.MustCompile(`\btee\s+(?:-a\s+)?("[^"]+"|'[^']+'|[^\s;|&)<>]+)`)
-	reCpMv     = regexp.MustCompile(`\b(?:cp|mv)\s+(?:-[a-zA-Z]+\s+)*("[^"]+"|'[^']+'|[^\s]+)\s+("[^"]+"|'[^']+'|[^\s;|&)]+)`)
-	reMkdir    = regexp.MustCompile(`\bmkdir\s+(?:-p\s+)?(.+)`)
-	reNodeArgv = regexp.MustCompile(`\bnode\s+(?:-\s|-e\s+(?:'[^']*'|"[^"]*"))([^\n<]*)`)
-	reVarTok   = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?`)
-	reBareTok  = regexp.MustCompile(`("[^"\n]*/[^"\n]*"|'[^'\n]*/[^'\n]*'|[A-Za-z0-9_./$${}-]*/[A-Za-z0-9_./$${}*-]+)`)
-	reForGlob  = regexp.MustCompile(`(?:for\s+\w+\s+in\s+|=\()\s*("[^"]*\*[^"]*"|'[^']*\*[^']*'|[^\s;)]*\*[^\s;)]*)`)
-	reURLInRun = regexp.MustCompile(`https?://[^\s"'` + "`" + `),]+`)
-	reEmptyChk = regexp.MustCompile(`(?:-eq\s+0|-z\s+|\bif-no-files-found|\[\[\s*\$\{#|\blength\s*===?\s*0|\.length\s*===?\s*0)`)
+	reRedirect   = regexp.MustCompile(`(?:^|[^0-9&<>\-])>>?\s*("[^"]+"|'[^']+'|[^\s;|&)<>]+)`)
+	reTee        = regexp.MustCompile(`\btee\s+(?:-a\s+)?("[^"]+"|'[^']+'|[^\s;|&)<>]+)`)
+	reCpMv       = regexp.MustCompile(`\b(?:cp|mv)\s+(?:-[a-zA-Z]+\s+)*("[^"]+"|'[^']+'|[^\s]+)\s+("[^"]+"|'[^']+'|[^\s;|&)]+)`)
+	reMkdir      = regexp.MustCompile(`\bmkdir\s+(?:-p\s+)?(.+)`)
+	reNodeArgv   = regexp.MustCompile(`\bnode\s+(?:-\s|-e\s+(?:'[^']*'|"[^"]*"))([^\n<]*)`)
+	reVarTok     = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?`)
+	reBareTok    = regexp.MustCompile(`("[^"\n]*/[^"\n]*"|'[^'\n]*/[^'\n]*'|[A-Za-z0-9_./$${}-]*/[A-Za-z0-9_./$${}*-]+)`)
+	reForGlob    = regexp.MustCompile(`(?:for\s+\w+\s+in\s+|=\()\s*("[^"]*\*[^"]*"|'[^']*\*[^']*'|[^\s;)]*\*[^\s;)]*)`)
+	reURLInRun   = regexp.MustCompile(`https?://[^\s"'` + "`" + `),]+`)
+	reEmptyChk   = regexp.MustCompile(`(?:-eq\s+0|-z\s+|\bif-no-files-found|\[\[\s*\$\{#|\blength\s*===?\s*0|\.length\s*===?\s*0)`)
+	reVerifier   = regexp.MustCompile(`(?m)(?:^|[;&|])\s*(?:diff|cmp)\s|\bsha256sum\s+(?:-c|--check)\b|\bcosign\s+verify(?:-[[:alnum:]-]+)?\b|\bjq\s+(?:-[[:alpha:]]*e[[:alpha:]]*|--exit-status)\b|\btest\s+-s\b|\bbuf\s+breaking\b|\bgo-apidiff\b`)
+	reSourceTest = regexp.MustCompile(`\bgo\s+test\b|\bmake(?:\s+-\S+(?:\s+\S+)?)?\s+(?:test|check)\b|\bnpm\s+test\b|\bpnpm\s+test\b|\byarn\s+test\b|\bpytest\b|\bcargo\s+test\b|\bmvnw?\s+test\b|\bgradlew?\s+test\b|\bdotnet\s+test\b|\bbazel\s+test\b`)
 	// Shell-local assignment at the start of a line: VAR=value.
 	reLocalAssign = regexp.MustCompile(`(?m)^\s*([A-Z_][A-Z0-9_]*)=("[^"\n]*"|'[^'\n]*'|[^\s;&|]+)`)
 )
@@ -80,6 +82,12 @@ var toolchainCommands = []string{
 
 // failureMarkers are the ways a run block can decide to fail the job.
 var failureMarkers = []string{"exit 1", "process.exit(1)", "::error::", "exit(1)", "throw new Error"}
+
+const (
+	assertionExplicitFailure = "explicit_failure"
+	assertionVerification    = "evidence_verification"
+	assertionSourceTest      = "source_test"
+)
 
 func unquote(s string) string { return strings.Trim(strings.TrimSpace(s), `"'`) }
 
@@ -136,11 +144,9 @@ func analyzeStep(s workflow.Step, env map[string]string) stepFacts {
 	}
 
 	low := strings.ToLower(run)
-	for _, m := range failureMarkers {
-		if strings.Contains(low, strings.ToLower(m)) {
-			f.Gate = true
-			break
-		}
+	f.AssertionClass = assertionClass(low)
+	if f.AssertionClass == assertionSourceTest {
+		f.External = append(f.External, "source:repository")
 	}
 
 	for _, m := range reRedirect.FindAllStringSubmatch(run, -1) {
@@ -184,7 +190,7 @@ func analyzeStep(s workflow.Step, env map[string]string) stepFacts {
 	}
 
 	f.GlobLoops = findGlobLoops(run, env)
-	f.Egress = findEgress(run)
+	f.External = append(f.External, findEgress(run)...)
 	for _, c := range toolchainCommands {
 		if strings.Contains(low, c) {
 			f.Derives = true
@@ -195,7 +201,23 @@ func analyzeStep(s workflow.Step, env map[string]string) stepFacts {
 	sortUnique(&f.Writes)
 	sortUnique(&f.Dirs)
 	sortUnique(&f.Refs)
+	sortUnique(&f.External)
 	return f
+}
+
+func assertionClass(run string) string {
+	if reSourceTest.MatchString(run) {
+		return assertionSourceTest
+	}
+	if reVerifier.MatchString(run) {
+		return assertionVerification
+	}
+	for _, marker := range failureMarkers {
+		if strings.Contains(run, strings.ToLower(marker)) {
+			return assertionExplicitFailure
+		}
+	}
+	return ""
 }
 
 // findGlobLoops locates shell iterations over a glob and records whether an
