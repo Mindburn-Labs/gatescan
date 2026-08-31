@@ -63,6 +63,7 @@ type Finding struct {
 type Assertion struct {
 	Step     string   `json:"step"`
 	Line     int      `json:"line"`
+	Class    string   `json:"class"`
 	Internal []string `json:"internal_inputs,omitempty"`
 	External []string `json:"external_inputs,omitempty"`
 }
@@ -143,7 +144,7 @@ func assessJob(job workflow.Job, facts []stepFacts) ([]Assertion, []Finding) {
 	derived := derivedProducers(facts)
 
 	for i, f := range facts {
-		if !f.Gate {
+		if f.AssertionClass == "" {
 			continue
 		}
 		produced := producedBefore(facts, i)
@@ -152,8 +153,8 @@ func assessJob(job workflow.Job, facts []stepFacts) ([]Assertion, []Finding) {
 			self[w] = true
 		}
 
-		a := Assertion{Step: f.Step.Label(), Line: f.Step.Line}
-		a.External = append(a.External, f.Egress...)
+		a := Assertion{Step: f.Step.Label(), Line: f.Step.Line, Class: f.AssertionClass}
+		a.External = append(a.External, f.External...)
 		sources := map[string]string{}
 		for _, ref := range f.Refs {
 			if self[ref] {
@@ -260,7 +261,7 @@ func suppressedEvidence(job workflow.Job, facts []stepFacts) []Finding {
 			continue
 		}
 		for j := i + 1; j < len(facts); j++ {
-			if !facts[j].Gate {
+			if facts[j].AssertionClass == "" {
 				continue
 			}
 			shared := intersect(f.Writes, facts[j].Refs)
@@ -297,7 +298,7 @@ func fabricatedFallback(job workflow.Job, facts []stepFacts) []Finding {
 			continue
 		}
 		for j := i + 1; j < len(facts); j++ {
-			if !facts[j].Gate {
+			if facts[j].AssertionClass == "" {
 				continue
 			}
 			shared := intersect(f.Writes, facts[j].Refs)
@@ -325,7 +326,7 @@ func fabricatedFallback(job workflow.Job, facts []stepFacts) []Finding {
 func absenceReadsAsPass(job workflow.Job, facts []stepFacts) []Finding {
 	var out []Finding
 	for _, f := range facts {
-		if !f.Gate {
+		if f.AssertionClass == "" {
 			continue
 		}
 		for _, g := range f.GlobLoops {

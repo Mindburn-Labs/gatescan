@@ -74,14 +74,15 @@ finance-gate  (.github/workflows/finance-gate.yml)
 
 ## Verdicts
 
-Per job, from its checks — a check being any step that can turn the run red:
+Per job, from its evidence assertions. These are explicit failure blocks,
+path-verification tools, and conventional source test commands:
 
 | Verdict | Meaning |
 | --- | --- |
 | `ESTABLISHES` | every check has at least one input it did not produce |
 | `PARTIAL` | some checks rest entirely on inputs this job produced |
 | `ESTABLISHES_NOTHING` | every check rests entirely on inputs this job produced |
-| `NO_ASSERTIONS` | no step in this job can fail the run |
+| `NO_ASSERTIONS` | no evidence assertion was identified in this job |
 | `INPUTS_NOT_IDENTIFIED` | the checks' shell was too opaque to read — **not** a verdict on the gate |
 
 That last row is the one to read carefully. When gatescan cannot name a check's
@@ -131,9 +132,12 @@ scan clean. A scanner that flags everything is worth nothing.
   read are invisible to it; a clean report is not proof of a sound gate. Jobs it
   could not read are counted separately and reported as `INPUTS_NOT_IDENTIFIED`,
   so coverage gaps show up as gaps.
-- A step is treated as a check when its shell names an explicit failure path
-  (`exit 1`, `process.exit(1)`, `::error::`). A step that fails only through a
-  called tool's exit code is not counted, which under-reports.
+- Assertions are classified as `explicit_failure`, `evidence_verification`
+  (`diff`, `cmp`, `sha256sum -c`, `cosign verify`, `jq -e`, `test -s`,
+  `buf breaking`, `go-apidiff`), or `source_test` (`make test`, `make check`,
+  `go test`, package-manager test commands, and common language test runners).
+  Arbitrary `run:` steps are not assertions merely because shell errors can
+  fail the job.
 - `unreachable_subject` shells out to `git check-ignore` rather than
   reimplementing the pattern language. Without git, it reports nothing.
 - Reachability is judged per job. Evidence handed between jobs through uploaded
