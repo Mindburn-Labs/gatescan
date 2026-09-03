@@ -37,6 +37,11 @@ flags:
                  (uses git check-ignore; without it that rule is skipped
                  and says so in the report rather than passing silently)
   -out DIR       directory for report.json and report.html (default ".")
+  -accept FILE   JSON file of accepted findings. Each entry needs a rule, a
+                 match substring and a reason; an entry without a reason is
+                 rejected, because that is an ignore list. Accepted findings
+                 stay in the report with the decision attached, and a sign-off
+                 that no longer matches anything is reported as stale.
   -fail-on LEVEL exit non-zero when a finding at or above LEVEL is present:
                  critical (default), high, medium, or none
   -json          print the JSON report to stdout instead of the table
@@ -76,6 +81,7 @@ func run(args []string) error {
 	fs.SetOutput(os.Stderr)
 	repoDir := fs.String("repo", "", "repository root for the unreachable-subject rule")
 	outDir := fs.String("out", ".", "directory for report.json and report.html")
+	acceptPath := fs.String("accept", "", "JSON file of accepted findings, each with a stated reason")
 	failOn := fs.String("fail-on", "critical", "exit non-zero at this severity or above")
 	asJSON := fs.Bool("json", false, "print the JSON report to stdout")
 	quiet := fs.Bool("quiet", false, "write report files without printing")
@@ -96,6 +102,9 @@ func run(args []string) error {
 	}
 
 	opts := detect.Options{}
+	if opts.Acceptances, err = detect.LoadAcceptances(*acceptPath); err != nil {
+		return err
+	}
 	if *repoDir != "" {
 		root, err := filepath.Abs(*repoDir)
 		if err != nil {

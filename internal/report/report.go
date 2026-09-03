@@ -37,6 +37,8 @@ type Summary struct {
 	ByRule               map[string]int `json:"by_rule"`
 	JobsEstablishNothing int            `json:"jobs_establishing_nothing"`
 	JobsUnanalysed       int            `json:"jobs_inputs_not_identified"`
+	Accepted             int            `json:"accepted"`
+	StaleAcceptances     int            `json:"stale_acceptances"`
 }
 
 // Build assembles a report from per-workflow results.
@@ -64,6 +66,8 @@ func Build(subject string, results []*detect.Result, now time.Time) *Report {
 				r.Summary.JobsUnanalysed++
 			}
 		}
+		r.Summary.Accepted += len(res.Accepted)
+		r.Summary.StaleAcceptances += len(res.StaleAcceptances)
 		for _, f := range res.Findings {
 			r.Summary.Findings++
 			r.Summary.BySeverity[f.Severity]++
@@ -126,6 +130,17 @@ func Terminal(w io.Writer, r *Report) {
 			fmt.Fprintf(w, "      what: %s\n", f.Detail)
 			fmt.Fprintf(w, "      referent: %s\n", f.Referent)
 		}
+		for _, a := range res.Accepted {
+			fmt.Fprintf(w, "\n  [accepted] %s at %s:%d\n", a.Finding.Rule, res.Path, a.Finding.Line)
+			fmt.Fprintf(w, "      what:   %s\n", a.Finding.Detail)
+			fmt.Fprintf(w, "      reason: %s\n", a.Reason)
+			if a.By != "" {
+				fmt.Fprintf(w, "      by:     %s %s\n", a.By, a.At)
+			}
+		}
+		for _, s := range res.StaleAcceptances {
+			fmt.Fprintf(w, "\n  [stale acceptance] %s\n", s)
+		}
 		for _, s := range res.Skipped {
 			fmt.Fprintf(w, "\n  [skipped] %s\n", s)
 		}
@@ -139,6 +154,12 @@ func Terminal(w io.Writer, r *Report) {
 	}
 	if r.Summary.JobsUnanalysed > 0 {
 		fmt.Fprintf(w, " — %d job(s) too opaque to read", r.Summary.JobsUnanalysed)
+	}
+	if r.Summary.Accepted > 0 {
+		fmt.Fprintf(w, " — %d accepted", r.Summary.Accepted)
+	}
+	if r.Summary.StaleAcceptances > 0 {
+		fmt.Fprintf(w, " — %d STALE acceptance(s)", r.Summary.StaleAcceptances)
 	}
 	fmt.Fprintln(w)
 }

@@ -123,6 +123,34 @@ consult the repository's own ignore rules; without it the report records that
 the rule did not run, rather than contributing a silent pass. A scanner that
 quietly skips is the defect it exists to find.
 
+## Accepted findings
+
+Some findings are correct and will never be acted on. The scanner is right that
+an in-house URI scheme cannot be resolved by a stranger, and the answer is
+sometimes "yes, and the digest beside it is how you verify it."
+
+There are two ways to handle that. Weaken the rule until it stops noticing, or
+write down that someone looked and decided. Only the second survives being asked
+about a year later, so gatescan takes an acceptance file:
+
+```sh
+gatescan scan .github/workflows -accept accept.json
+```
+
+Each entry needs a `rule`, a `match` substring of the finding's detail, and a
+`reason`. An entry without a reason is **rejected**, not skipped — an acceptance
+without a reason is an ignore list, and a malformed one that got skipped would
+read as an accepted finding. See [accept.example.json](accept.example.json).
+
+Accepted findings stay in the report with the decision attached. They are not
+deleted, and they do not count toward `-fail-on`. Matching is by rule, optional
+path suffix and detail substring — never by line number, because lines move and
+an acceptance that slides quietly onto a different finding is worse than none.
+
+An acceptance that no longer matches anything is reported as **stale**. Either
+the thing it covered is gone, or the sign-off is sitting there waiting to cover
+something else, and both are worth knowing.
+
 ## Precision over recall
 
 Extraction is deliberately conservative. A missed write costs a missed finding;

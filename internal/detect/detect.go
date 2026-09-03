@@ -90,6 +90,8 @@ type Options struct {
 	GitIgnored func(path string) bool
 	// PathExists reports whether a repo-relative path is present on disk.
 	PathExists func(path string) bool
+	// Acceptances are human decisions to tolerate specific findings.
+	Acceptances []Acceptance
 }
 
 // Result is everything gatescan concluded about one workflow file.
@@ -99,6 +101,11 @@ type Result struct {
 	Jobs     []JobResult `json:"jobs"`
 	Findings []Finding   `json:"findings"`
 	Skipped  []string    `json:"skipped_rules,omitempty"`
+	// Accepted are findings a human decided to tolerate, kept visible with the
+	// decision attached rather than dropped.
+	Accepted []Accepted `json:"accepted,omitempty"`
+	// StaleAcceptances name sign-offs that no longer cover anything.
+	StaleAcceptances []string `json:"stale_acceptances,omitempty"`
 }
 
 // Run applies every rule to one parsed workflow.
@@ -132,6 +139,7 @@ func Run(wf *workflow.Workflow, opts Options) *Result {
 	res.Skipped = skipped
 
 	sortFindings(res.Findings)
+	applyAcceptances(res, opts.Acceptances)
 	return res
 }
 

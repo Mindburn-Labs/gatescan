@@ -1,0 +1,12 @@
+{
+  "acceptances": [
+    {
+      "rule": "unresolvable_anchor",
+      "path": "release.yml",
+      "match": "cosign://",
+      "reason": "In-house scheme, but the same record carries the image digest this names, so a reader can verify it. Adding a field purely to satisfy the scanner would bend the record to the tool.",
+      "by": "who decided",
+      "at": "2026-09-03"
+    }
+  ]
+}
