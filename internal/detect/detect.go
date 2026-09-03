@@ -377,7 +377,8 @@ func syntheticAnchors(wf *workflow.Workflow, job workflow.Job, facts []stepFacts
 	seen := map[string]bool{}
 	var out []Finding
 
-	consider := func(step workflow.Step, text string) {
+	consider := func(step workflow.Step, text, context string) {
+		bound := digestBoundStems(context)
 		for _, lit := range reURLLit.FindAllString(text, -1) {
 			expanded := workflow.ExpandRaw(lit, env)
 			if seen[expanded] {
@@ -387,8 +388,21 @@ func syntheticAnchors(wf *workflow.Workflow, job workflow.Job, facts []stepFacts
 			if reason == "" {
 				continue
 			}
+			// A locator a stranger cannot follow is still sound evidence when
+			// the same block binds a digest for the same subject: the reader
+			// verifies the bytes they were handed rather than fetching them.
+			// Verifiable matters; resolvable is a convenience.
+			//
+			// This never excuses a reserved documentation host. Digesting a
+			// fabricated file proves the fabrication is intact, not that it
+			// describes anything.
+			if rule == RuleUnresolvable {
+				if stem := anchorStem(text, lit); stem != "" && bound[stem] {
+					continue
+				}
+			}
 			seen[expanded] = true
-			line := wf.LineOf(strings.SplitN(lit, "$", 2)[0])
+			line := wf.LineOfFrom(strings.SplitN(lit, "$", 2)[0], step.Line)
 			if line == 0 {
 				line = step.Line
 			}
@@ -409,20 +423,66 @@ func syntheticAnchors(wf *workflow.Workflow, job workflow.Job, facts []stepFacts
 	}
 
 	for _, f := range facts {
-		consider(f.Step, f.Step.Run)
+		consider(f.Step, f.Step.Run, f.Step.Run)
 		for _, v := range f.Step.Env {
-			consider(f.Step, v)
+			consider(f.Step, v, f.Step.Run+"\n"+v)
 		}
 		for _, v := range f.Step.With {
-			consider(f.Step, v)
+			consider(f.Step, v, f.Step.Run+"\n"+v)
 		}
 	}
 	for _, v := range env {
 		if len(job.Steps) > 0 {
-			consider(job.Steps[0], v)
+			consider(job.Steps[0], v, v)
 		}
 	}
 	return out
+}
+
+var (
+	// A binding whose name ends in a digest-ish suffix pins content.
+	reDigestBinding = regexp.MustCompile(`(?i)\b([A-Za-z_][A-Za-z0-9_]*?)_(?:digest|sha256|sha512|checksum)\b`)
+	// The identifier immediately preceding a value carries it.
+	reCarrierName = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)[^A-Za-z0-9_]*$`)
+	// Suffixes that mark a name as a locator rather than the subject itself.
+	refSuffixes = []string{"_ref", "_uri", "_url", "_link", "_path", "_location"}
+)
+
+// digestBoundStems collects the subjects the text binds a digest for, as
+// lower-cased stems: "SBOM_DIGEST" and "sbom_digest: $x" both yield "sbom".
+func digestBoundStems(text string) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range reDigestBinding.FindAllStringSubmatch(text, -1) {
+		out[strings.ToLower(m[1])] = true
+	}
+	return out
+}
+
+// anchorStem names the subject an anchor literal describes, by reading back to
+// the identifier that carries it and dropping any locator suffix. It returns ""
+// when no carrier is discernible, which leaves the finding standing — silence
+// here must not suppress.
+func anchorStem(text, literal string) string {
+	i := strings.Index(text, literal)
+	if i < 0 {
+		return ""
+	}
+	const window = 96
+	start := i - window
+	if start < 0 {
+		start = 0
+	}
+	m := reCarrierName.FindStringSubmatch(text[start:i])
+	if m == nil {
+		return ""
+	}
+	name := strings.ToLower(m[1])
+	for _, suf := range refSuffixes {
+		if strings.HasSuffix(name, suf) {
+			return strings.TrimSuffix(name, suf)
+		}
+	}
+	return ""
 }
 
 var reScheme = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*)://`)

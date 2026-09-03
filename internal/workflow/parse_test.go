@@ -133,3 +133,25 @@ func TestExpandRawPreservesURLAuthority(t *testing.T) {
 		t.Errorf("Expand path = %q, want a/b", p)
 	}
 }
+
+// The same literal in several jobs must cite its own occurrence. Sending the
+// reader to another job's line is a citation that does not survive following.
+func TestLineOfFromPrefersTheOccurrenceAfterTheStep(t *testing.T) {
+	src := []byte("name: t\njobs:\n  a:\n    steps:\n      - run: echo MARKER\n  b:\n    steps:\n      - run: echo MARKER\n")
+	wf, err := Parse("t.yml", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := wf.LineOf("MARKER")
+	if first != 5 {
+		t.Fatalf("first occurrence = line %d, want 5", first)
+	}
+	second := wf.LineOfFrom("MARKER", 6)
+	if second != 8 {
+		t.Errorf("occurrence at or after line 6 = %d, want 8", second)
+	}
+	// Nothing after the offset falls back rather than reporting no line.
+	if got := wf.LineOfFrom("MARKER", 99); got != 5 {
+		t.Errorf("fallback = %d, want 5", got)
+	}
+}

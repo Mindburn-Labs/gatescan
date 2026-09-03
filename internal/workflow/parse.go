@@ -31,9 +31,28 @@ type Workflow struct {
 }
 
 // LineOf returns the 1-based line on which literal first appears, or 0.
-func (w *Workflow) LineOf(literal string) int {
-	for i, l := range w.Lines {
-		if strings.Contains(l, literal) {
+func (w *Workflow) LineOf(literal string) int { return w.LineOfFrom(literal, 0) }
+
+// LineOfFrom returns the first line at or after `from` (1-based) containing
+// literal, or 0.
+//
+// The same literal often appears in several jobs of one file. Reporting the
+// file's first occurrence for all of them sends the reader to another job's
+// line, and a citation that does not survive being followed is worse than none.
+func (w *Workflow) LineOfFrom(literal string, from int) int {
+	start := from - 1
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(w.Lines); i++ {
+		if strings.Contains(w.Lines[i], literal) {
+			return i + 1
+		}
+	}
+	// Nothing at or after the offset: fall back to the file's first occurrence
+	// rather than reporting no line at all.
+	for i := 0; i < start && i < len(w.Lines); i++ {
+		if strings.Contains(w.Lines[i], literal) {
 			return i + 1
 		}
 	}

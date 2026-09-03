@@ -460,3 +460,73 @@ jobs:
 		}
 	}
 }
+
+// A locator a stranger cannot follow is still sound evidence when the same
+// block binds a digest for the same subject. Verifiable is what matters;
+// resolvable is a convenience, and a rule that keeps firing after the real
+// fix has landed is a rule people learn to ignore.
+func TestDigestBoundAnchorIsNotRaised(t *testing.T) {
+	withDigest := `
+name: t
+on: [push]
+jobs:
+  g:
+    steps:
+      - name: record evidence
+        run: |
+          SBOM_DIGEST="sha256:$(sha256sum sbom.spdx.json | cut -d' ' -f1)"
+          jq -n \
+            --arg sbom_ref "artifact://sbom.spdx.json" \
+            --arg sbom_digest "${SBOM_DIGEST}" \
+            '{sbom_ref: $sbom_ref, sbom_digest: $sbom_digest}' > out.json
+`
+	if n := rules(scan(t, withDigest, Options{}))[RuleUnresolvable]; n != 0 {
+		t.Errorf("digest-bound anchor still raised: %+v", scan(t, withDigest, Options{}).Findings)
+	}
+
+	// Same reference with nothing pinning it must still be raised.
+	withoutDigest := `
+name: t
+on: [push]
+jobs:
+  g:
+    steps:
+      - name: record evidence
+        run: |
+          jq -n --arg sbom_ref "artifact://sbom.spdx.json" '{sbom_ref: $sbom_ref}' > out.json
+`
+	if n := rules(scan(t, withoutDigest, Options{}))[RuleUnresolvable]; n != 1 {
+		t.Errorf("unpinned anchor = %d findings, want 1", n)
+	}
+}
+
+// A digest beside a fabricated host proves the fabrication is intact, not that
+// it describes anything. The reserved-host rule must not be suppressible.
+func TestDigestDoesNotExcuseAReservedHost(t *testing.T) {
+	res := scan(t, `
+name: t
+on: [push]
+jobs:
+  g:
+    steps:
+      - name: record evidence
+        run: |
+          jq -n \
+            --arg export_ref "https://ci.finance.example/jobs/1" \
+            --arg export_digest "sha256:abc" \
+            '{export_ref: $export_ref, export_digest: $export_digest}' > out.json
+`, Options{})
+	if n := rules(res)[RuleSyntheticAnchor]; n != 1 {
+		t.Fatalf("reserved host was suppressed by a sibling digest: %+v", res.Findings)
+	}
+}
+
+// An unreadable carrier must leave the finding standing. Silence is not consent.
+func TestUnreadableCarrierDoesNotSuppress(t *testing.T) {
+	if stem := anchorStem("no carrier here artifact://x.json", "artifact://x.json"); stem != "" {
+		t.Errorf("anchorStem invented a stem %q from a name with no locator suffix", stem)
+	}
+	if stem := anchorStem("--arg sbom_ref \"artifact://x.json\"", "artifact://x.json"); stem != "sbom" {
+		t.Errorf("anchorStem = %q, want sbom", stem)
+	}
+}

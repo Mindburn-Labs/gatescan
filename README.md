@@ -104,6 +104,15 @@ could not parse.
 | `suppressed_evidence_step` | high | `continue-on-error: true` on a step producing artifacts a later check consumes. |
 | `absence_reads_as_pass` | high | A glob iteration that fails only from inside its body, so zero matches exits zero. |
 
+An anchor is not raised when the same block binds a digest for the same subject
+— `sbom_ref` alongside `sbom_digest`, say. What matters is that a reader can
+verify the bytes they were handed, not that they can fetch them: locators rot,
+and CI artifact retention has a clock on it. Digests do not.
+
+That exemption never applies to a reserved documentation host. Digesting a
+fabricated file proves the fabrication is intact, not that it describes
+anything.
+
 The two anchor rules are deliberately separated by how much they can prove. A
 reserved documentation host is fake as a matter of standard, and is reported as
 fact. An unfamiliar scheme might be a perfectly good internal locator; the
