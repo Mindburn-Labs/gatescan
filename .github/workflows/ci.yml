@@ -20,4 +20,4 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
-    uses: Mindburn-Labs/platform-actions/.github/workflows/ci.yml@v2
+    uses: Mindburn-Labs/platform-actions/.github/workflows/ci.yml@v2.0.1
