@@ -1,5 +1,17 @@
 # Agent Operational Guidelines for gatescan
 
+<!-- helm-sdlc-baseline:v1 -->
+Apply the [HELM SDLC baseline](https://github.com/Mindburn-Labs/docs/blob/main/ai/sdlc.md).
+Before implementation, define the outcome and observable acceptance conditions.
+Use the existing tracker and isolated worktree; verify in proportion to risk with
+the owning repository's checks. Bind results to the tested source and configuration.
+Missing, skipped or inconclusive required checks are not passes. Report source,
+CI, release, deployment, runtime and user acceptance separately; verify applicable
+rollback, restoration and external-effect recovery. Use `Refs` while acceptance
+work remains and `Closes` only when the whole issue is fulfilled. Preserve existing
+authority boundaries and never bypass failed checks or move published tags.
+<!-- /helm-sdlc-baseline -->
+
 gatescan is an offline Go CLI. It reads GitHub Actions workflows and, for every
 check they contain, reports whether any external referent could make it fail,
 as a terminal table plus `report.json` and `report.html`. It is an early
