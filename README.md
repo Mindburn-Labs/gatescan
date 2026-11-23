@@ -1,17 +1,11 @@
 # gatescan
 
-Offline scanner for CI gates. Point it at the workflows you already have; for
-every check they contain it asks one question:
+gatescan reads GitHub Actions workflows and reports which inputs it can identify
+for each check. It flags patterns that weaken a gate, such as a check that
+validates only files written earlier in the same job. Findings cite the
+workflow line.
 
-> **What external referent could make this fail?**
-
-A check whose every input was produced by the same job moments earlier is not a
-check. It reports green for the same reason a mirror agrees with you, however
-much validation ceremony surrounds it. gatescan finds the shapes that produce
-that outcome, and cites the line.
-
-Workflows in → admissibility report out. Nothing else: no network calls, no
-service dependency, nothing from the scanned workflows is executed.
+Scanning runs offline and reads workflows as text.
 
 **Status: early prototype (v0.1).** The rule set and report formats may still
 change. Built by [Mindburn Labs](https://mindburn.org).
@@ -53,6 +47,8 @@ own errors, 1 on findings at or above the threshold, 0 otherwise.
 
 ## What a scan looks like
 
+Example output for a job that validates evidence from one of its own steps:
+
 ```
 gatescan 0.1.0-prototype — offline gate admissibility scan
 subject: .github/workflows/finance-gate.yml
@@ -85,12 +81,8 @@ path-verification tools, and conventional source test commands:
 | `NO_ASSERTIONS` | no evidence assertion was identified in this job |
 | `INPUTS_NOT_IDENTIFIED` | the checks' shell was too opaque to read — **not** a verdict on the gate |
 
-That last row is the one to read carefully. When gatescan cannot name a check's
-inputs it says so, rather than reporting `ESTABLISHES_NOTHING` on the strength of
-having seen nothing. Drawing a conclusion from an empty reading is the defect
-this tool exists to find, and it is not exempt from it: an early version scored
-its own CI as establishing nothing, on a `gofmt` step whose inputs it simply
-could not parse.
+Opaque checks receive `INPUTS_NOT_IDENTIFIED`. An early version
+misclassified its own `gofmt` step because its inputs were opaque to the scanner.
 
 ## Rules
 
@@ -104,63 +96,36 @@ could not parse.
 | `suppressed_evidence_step` | high | `continue-on-error: true` on a step producing artifacts a later check consumes. |
 | `absence_reads_as_pass` | high | A glob iteration that fails only from inside its body, so zero matches exits zero. |
 
-An anchor is not raised when the same block binds a digest for the same subject
-— `sbom_ref` alongside `sbom_digest`, say. What matters is that a reader can
-verify the bytes they were handed, not that they can fetch them: locators rot,
-and CI artifact retention has a clock on it. Digests do not.
+A digest for the same subject, such as `sbom_digest` alongside `sbom_ref` in
+the same block, lets a reader verify the bytes after the locator expires. That
+binding suppresses `unresolvable_anchor`. `synthetic_anchor` still reports
+reserved documentation hosts.
 
-That exemption never applies to a reserved documentation host. Digesting a
-fabricated file proves the fabrication is intact, not that it describes
-anything.
-
-The two anchor rules are deliberately separated by how much they can prove. A
-reserved documentation host is fake as a matter of standard, and is reported as
-fact. An unfamiliar scheme might be a perfectly good internal locator; the
-workflow gives no way to tell, so gatescan says that rather than guessing.
-
-Rules that cannot be evaluated say so. `unreachable_subject` needs `-repo` to
-consult the repository's own ignore rules; without it the report records that
-the rule did not run, rather than contributing a silent pass. A scanner that
-quietly skips is the defect it exists to find.
+`unreachable_subject` uses `-repo` to consult the repository's ignore rules.
+Scanning without `-repo` records the rule as skipped.
 
 ## Accepted findings
 
-Some findings are correct and will never be acted on. The scanner is right that
-an in-house URI scheme cannot be resolved by a stranger, and the answer is
-sometimes "yes, and the digest beside it is how you verify it."
-
-There are two ways to handle that. Weaken the rule until it stops noticing, or
-write down that someone looked and decided. Only the second survives being asked
-about a year later, so gatescan takes an acceptance file:
+An acceptance file records the reason for accepting a finding. For example,
+a nonstandard URI may be a valid internal locator.
 
 ```sh
 gatescan scan .github/workflows -accept accept.json
 ```
 
-Each entry needs a `rule`, a `match` substring of the finding's detail, and a
-`reason`. An entry without a reason is **rejected**, not skipped — an acceptance
-without a reason is an ignore list, and a malformed one that got skipped would
-read as an accepted finding. See [accept.example.json](accept.example.json).
+Each entry requires a `rule`, a `match` substring of the finding's detail,
+and a `reason`. It can also specify a path suffix. An incomplete entry fails
+validation. See [accept.example.json](accept.example.json).
 
-Accepted findings stay in the report with the decision attached. They are not
-deleted, and they do not count toward `-fail-on`. Matching is by rule, optional
-path suffix and detail substring — never by line number, because lines move and
-an acceptance that slides quietly onto a different finding is worse than none.
-
-An acceptance that no longer matches anything is reported as **stale**. Either
-the thing it covered is gone, or the sign-off is sitting there waiting to cover
-something else, and both are worth knowing.
+Accepted findings remain in the report with the reason attached and are
+excluded from the `-fail-on` threshold. Acceptance entries that no longer
+match are reported as **stale**.
 
 ## Precision over recall
 
-Extraction is deliberately conservative. A missed write costs a missed finding;
-a phantom write costs a false accusation, and only one of those is survivable
-in a tool whose entire value is being believed. Where the shell is ambiguous,
-gatescan stays quiet.
-
-`fixtures/honest-gate.yml` exists to hold that line: a workflow whose checks
-read committed repository content and refuse to pass on an empty set. It must
-scan clean. A scanner that flags everything is worth nothing.
+gatescan reports findings when it can identify the relevant inputs in the
+workflow. The `fixtures/honest-gate.yml` fixture checks committed repository
+content and fails on an empty input set. It should scan without findings.
 
 ## Limits
 

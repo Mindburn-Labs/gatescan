@@ -237,12 +237,8 @@ func collect(subject string) ([]string, error) {
 	return out, err
 }
 
-// gitIgnoredFunc defers gitignore semantics to git itself.
-//
-// ponytail: shelling out to `git check-ignore` beats reimplementing the
-// pattern language, which has precedence rules that are easy to get subtly
-// wrong. If git is unavailable the rule reports every path as not-ignored,
-// which under-reports rather than accusing falsely.
+// gitIgnoredFunc uses `git check-ignore` to apply Git's pattern precedence.
+// When Git is unavailable, it treats every path as outside the ignore rules.
 func gitIgnoredFunc(root string) func(string) bool {
 	if _, err := exec.LookPath("git"); err != nil {
 		return func(string) bool { return false }
