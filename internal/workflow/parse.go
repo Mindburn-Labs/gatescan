@@ -299,16 +299,13 @@ func (w *Workflow) JobEnv(j Job) map[string]string {
 // `${{ github.workspace }}` is elided (it is the working directory root), and
 // any other `${{ x }}` becomes `<x>` so two references to the same run id
 // compare equal while different expressions stay distinct.
-//
-// ponytail: substitution is bounded to a fixed number of passes rather than
-// tracking a resolution graph. Raise the bound if real workflows nest deeper.
 func Expand(s string, env map[string]string) string {
 	return normalizePath(ExpandRaw(s, env))
 }
 
 // ExpandRaw performs the same substitution as Expand without collapsing path
-// separators. URLs must go through this one: normalising "//" would turn
-// "https://host/x" into "https:/host/x" and lose the host entirely.
+// separators. Use it for URLs so the scheme and host stay intact. Expansion
+// limits the number of substitution passes to bound work on cyclic references.
 func ExpandRaw(s string, env map[string]string) string {
 	const maxPasses = 8
 	for pass := 0; pass < maxPasses; pass++ {
