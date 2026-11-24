@@ -10,11 +10,11 @@ import (
 	"github.com/Mindburn-Labs/gatescan/internal/workflow"
 )
 
-// Severity ranks a finding by what it costs the reader to be wrong about it.
+// Severity ranks findings by their impact on the gate's evidence.
 const (
-	SeverityCritical = "critical" // the gate cannot fail
-	SeverityHigh     = "high"     // the gate can fail, but not for the stated reason
-	SeverityMedium   = "medium"   // the gate's evidence is weaker than it appears
+	SeverityCritical = "critical"
+	SeverityHigh     = "high"
+	SeverityMedium   = "medium"
 )
 
 // Rule identifiers. Stable strings: they end up in report.json.
@@ -181,7 +181,7 @@ func assessJob(job workflow.Job, facts []stepFacts) ([]Assertion, []Finding) {
 
 		if len(a.Internal) > 0 && len(a.External) == 0 {
 			sev, referent := SeverityCritical,
-				"none — this check compares the job's output against the job's output, so it cannot fail"
+				"no external input identified. The check reads only output written by an earlier step in this job"
 			if distinctValues(sources) > 1 {
 				// Two steps producing independently and then compared is the
 				// reproducible-build idiom, where disagreement is the signal.

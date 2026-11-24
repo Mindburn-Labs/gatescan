@@ -19,6 +19,7 @@ jobs:
       - name: Verify every attestation
         run: |
           set -euo pipefail
+          shopt -s nullglob
           for att in build/attestations/*.json; do
             if ! grep -q '"verified":true' "$att"; then
               echo "::error::unverified attestation $att"

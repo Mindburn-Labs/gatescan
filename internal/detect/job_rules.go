@@ -77,8 +77,8 @@ func fabricatedFallback(job workflow.Job, facts []stepFacts) []Finding {
 	return out
 }
 
-// absenceReadsAsPass flags a glob iteration whose only failure path is inside
-// the loop body, so zero matches means success.
+// absenceReadsAsPass flags an unguarded glob loop that can pass when the
+// expansion yields no items.
 func absenceReadsAsPass(job workflow.Job, facts []stepFacts) []Finding {
 	var out []Finding
 	for _, f := range facts {
@@ -96,7 +96,7 @@ func absenceReadsAsPass(job workflow.Job, facts []stepFacts) []Finding {
 				Step:     f.Step.Label(),
 				Line:     f.Step.Line,
 				Detail:   fmt.Sprintf("iterates %s and fails only from inside the loop, with no emptiness check before it", g.Glob),
-				Referent: "none when the glob matches nothing — the step exits 0 and absence of evidence reads as evidence of compliance",
+				Referent: "if the expansion yields no items, the loop body never checks for evidence",
 			})
 		}
 	}
