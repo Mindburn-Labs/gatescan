@@ -55,7 +55,7 @@ subject: .github/workflows/finance-gate.yml
 question: For each check in these workflows: what external referent could make it fail?
 
 finance-gate  (.github/workflows/finance-gate.yml)
-  job export-evidence-gate         ESTABLISHES_NOTHING  every check rests entirely on inputs this job produced
+  job export-evidence-gate         ESTABLISHES_NOTHING  all checks with identified inputs rely only on this job's output
       check "Validate export result contract"
           external inputs: none
           internal inputs: services/invoice-export/.ci/evidence/result/export-result.json
@@ -65,7 +65,7 @@ finance-gate  (.github/workflows/finance-gate.yml)
       at:   .github/workflows/finance-gate.yml:46
       what: validates services/invoice-export/.ci/evidence/result/export-result.json,
             every one of which was written earlier in this same job ("Synthesise export evidence")
-      referent: none — this check compares the job's output against the job's output, so it cannot fail
+      referent: no external input identified. The check reads only output written by an earlier step in this job
 ```
 
 ## Verdicts
@@ -75,9 +75,9 @@ path-verification tools, and conventional source test commands:
 
 | Verdict | Meaning |
 | --- | --- |
-| `ESTABLISHES` | every check has at least one input it did not produce |
-| `PARTIAL` | some checks rest entirely on inputs this job produced |
-| `ESTABLISHES_NOTHING` | every check rests entirely on inputs this job produced |
+| `ESTABLISHES` | all checks with identified inputs have an external input |
+| `PARTIAL` | some checks with identified inputs rely only on this job's output |
+| `ESTABLISHES_NOTHING` | all checks with identified inputs rely only on this job's output |
 | `NO_ASSERTIONS` | no evidence assertion was identified in this job |
 | `INPUTS_NOT_IDENTIFIED` | the checks' shell was too opaque to read — **not** a verdict on the gate |
 
@@ -94,7 +94,7 @@ misclassified its own `gofmt` step because its inputs were opaque to the scanner
 | `synthetic_anchor` | high | An evidence reference on a reserved documentation host (RFC 2606). Fake by standard; no local convention rescues it. |
 | `unresolvable_anchor` | medium | An evidence reference using a non-standard URI scheme. May be a sound in-house locator — the workflow cannot say, so this is raised for a human and left below the default failure threshold. |
 | `suppressed_evidence_step` | high | `continue-on-error: true` on a step producing artifacts a later check consumes. |
-| `absence_reads_as_pass` | high | A glob iteration that fails only from inside its body, so zero matches exits zero. |
+| `absence_reads_as_pass` | high | An unguarded glob loop that can pass if expansion yields no items, for example with Bash's `nullglob`. |
 
 A digest for the same subject, such as `sbom_digest` alongside `sbom_ref` in
 the same block, lets a reader verify the bytes after the locator expires. That
@@ -106,11 +106,13 @@ Scanning without `-repo` records the rule as skipped.
 
 ## Accepted findings
 
-An acceptance file records the reason for accepting a finding. For example,
-a nonstandard URI may be a valid internal locator.
+An acceptance file records the reason for accepting a finding. The bundled
+example accepts the internal evidence URI in a synthetic workflow. Its other
+findings stay visible. The example disables the exit threshold so you can
+inspect the output directly.
 
 ```sh
-gatescan scan .github/workflows -accept accept.json
+gatescan scan fixtures/self-referential-gate.yml -accept accept.example.json -fail-on none
 ```
 
 Each entry requires a `rule`, a `match` substring of the finding's detail,

@@ -91,10 +91,10 @@ func WriteJSON(r *Report, dir string) (string, error) {
 }
 
 var verdictGloss = map[string]string{
-	detect.VerdictEstablishes: "every check has at least one input it did not produce",
+	detect.VerdictEstablishes: "all checks with identified inputs have an external input",
 	detect.VerdictPartial:     "some checks rest entirely on inputs this job produced",
-	detect.VerdictNothing:     "every check rests entirely on inputs this job produced",
-	detect.VerdictNoAssertion: "no step in this job can fail the run",
+	detect.VerdictNothing:     "all checks with identified inputs rely only on this job's output",
+	detect.VerdictNoAssertion: "no evidence assertion was identified in this job",
 	detect.VerdictUnanalysed:  "this job's checks were too opaque to read; not a verdict on the gate",
 }
 

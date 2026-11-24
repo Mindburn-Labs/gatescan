@@ -221,8 +221,8 @@ func assertionClass(run string) string {
 }
 
 // findGlobLoops locates shell iterations over a glob and records whether an
-// emptiness check appears before them. An unguarded glob loop that only fails
-// from inside its body passes when the glob matches nothing.
+// emptiness check appears in the step. An unguarded glob loop cannot check
+// for missing evidence if the expansion yields an empty list.
 func findGlobLoops(run string, env map[string]string) []globLoop {
 	var out []globLoop
 	for _, m := range reForGlob.FindAllStringSubmatchIndex(run, -1) {
